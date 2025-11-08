@@ -1,0 +1,191 @@
+import re
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.transforms import blended_transform_factory
+from matplotlib.ticker import MultipleLocator
+import streamlit as st
+
+st.title("Single-Case Design Graph Generator (Advanced + Multiple Baseline Mode)")
+
+# How many phases
+num_phases = st.number_input("How many phases?", min_value=1, max_value=5, value=2)
+
+phase_titles = []
+phase_measures = []  # list of list: per phase -> [(measure_name, data_list), ...]
+
+def parse_series(s: str):
+    """Parse numbers with missing markers, allowing comma or whitespace separators."""
+    if not s:
+        return []
+    tokens = re.split(r"[,\s]+", s.strip())
+    out = []
+    for t in tokens:
+        tt = t.strip().lower()
+        if tt in ("", "x", "-", "na"):
+            out.append(np.nan)
+        else:
+            try:
+                out.append(float(tt))
+            except ValueError:
+                st.error(f"Invalid entry '{t}'. Use numbers or 'x'/'-'/'na' for missing.")
+                return []
+    return out
+
+for i in range(num_phases):
+    st.subheader(f"Phase {i+1} Settings")
+    ptitle = st.text_input(f"Title for Phase {i+1}", value=f"Phase {i+1}", key=f"pt{i}")
+    phase_titles.append(ptitle)
+
+    m1_name = st.text_input(f"Name for Measure 1 in {ptitle}", value=f"Measure 1 ({ptitle})", key=f"m1n{i}")
+    m1_data = parse_series(st.text_input(f"Data for {m1_name} (comma or space separated)", key=f"m1d{i}"))
+
+    add_second = st.checkbox(f"Add second measure for {ptitle}?", key=f"add2_{i}")
+    measures = [(m1_name, m1_data)]
+    if add_second:
+        m2_name = st.text_input(f"Name for Measure 2 in {ptitle}", value=f"Measure 2 ({ptitle})", key=f"m2n{i}")
+        m2_data = parse_series(st.text_input(f"Data for {m2_name} (comma or space separated)", key=f"m2d{i}"))
+        measures.append((m2_name, m2_data))
+
+    phase_measures.append(measures)
+
+# Axis labels and scaling
+st.header("Axis Settings")
+graph_title = st.text_input("Graph Title", "Single-Case Design Graph")
+y_label = st.text_input("Dependent variable (Y-axis label)", "% correct responses")
+x_label = st.text_input("Unit of measurement (X-axis label)", "Sessions")
+y_min = st.number_input("Minimum Y value", value=0.0)
+y_max = st.number_input("Maximum Y value", value=100.0)
+y_tick = st.number_input("Y tick interval", value=10.0)
+x_tick = st.number_input("X tick interval", value=1.0)
+
+# Advanced display controls
+st.header("Advanced Graph Controls")
+show_title = st.checkbox("Show main graph title", value=True)
+show_phase_titles = st.checkbox("Show phase titles above each phase start", value=True)
+show_x_axis = st.checkbox("Show X-axis line", value=True)
+show_x_ticks = st.checkbox("Show X tick marks", value=True)
+show_x_tick_labels = st.checkbox("Show X tick labels", value=True)
+show_x_label = st.checkbox("Show X-axis label text", value=True)
+
+# Multiple Baseline options
+st.header("Multiple Baseline Options")
+is_multiple_baseline = st.checkbox("This graph is part of a multiple baseline figure", value=False)
+extend_phase_lines = False
+stair_step_length = 0.0
+if is_multiple_baseline:
+    extend_phase_lines = st.checkbox("Show stair-step extension at phase changes", value=False)
+    if extend_phase_lines:
+        stair_step_length = st.number_input("Horizontal extension length (in sessions)", min_value=0.0, value=3.0, step=0.5)
+
+# Generate
+if st.button("Generate Graph"):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    # Ensure the below-axis stair-step has canvas space and is not auto-shrunk away
+    fig.set_constrained_layout(False)
+    fig.set_tight_layout(False)
+    fig.subplots_adjust(bottom=0.25)
+
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+    markers = ["o", "s", "D", "^", "v", "P"]
+
+    current_x = 1
+    y_top = y_max + (y_max - y_min) * 0.05
+
+    # Track right-most x so we can widen for stair-step if needed
+    plotted_xmax = 1
+
+    for idx, (ptitle, measures) in enumerate(zip(phase_titles, phase_measures)):
+        # Longest sequence length in this phase
+        max_len = max((len(m[1]) for m in measures if m[1]), default=0)
+        if max_len == 0:
+            continue
+
+        # Plot each measure
+        for j, (mname, data) in enumerate(measures):
+            if not data:
+                continue
+            x_vals = np.arange(current_x, current_x + len(data))
+            ax.plot(
+                x_vals, data,
+                color=colors[(idx + j) % len(colors)],
+                marker=markers[(idx + j) % len(markers)],
+                label=mname,
+                linewidth=2,
+                markersize=6,
+            )
+            plotted_xmax = max(plotted_xmax, x_vals[-1])
+
+        # Phase title, left aligned at phase start
+        if show_phase_titles:
+            ax.text(
+                current_x, y_top, ptitle,
+                ha="left", va="bottom",
+                fontsize=10, fontweight="bold", wrap=True
+            )
+
+        # Phase change line and stair-step
+        if idx < len(phase_measures) - 1:
+            x_line = current_x + max_len - 0.5
+
+            # Standard vertical line inside axes
+            ax.axvline(x=x_line, color="black", linestyle="--", linewidth=1.5, zorder=3)
+
+            if is_multiple_baseline and extend_phase_lines and stair_step_length > 0:
+                # Draw in blended coords: x in data, y in axes.
+                bt = blended_transform_factory(ax.transData, ax.transAxes)
+                drop_axes = 0.06  # how far below the X-axis in axes units
+
+                # Vertical leg below the axis
+                ax.vlines(
+                    x_line, 0.0, -drop_axes,
+                    colors="black", linestyles="--", linewidth=1.5,
+                    transform=bt, clip_on=False, zorder=4
+                )
+                # Horizontal leg to the right, below the axis
+                ax.hlines(
+                    -drop_axes, x_line, x_line + stair_step_length,
+                    colors="black", linestyles="--", linewidth=1.5,
+                    transform=bt, clip_on=False, zorder=4
+                )
+
+                # Ensure we have x-range to show the horizontal leg
+                plotted_xmax = max(plotted_xmax, x_line + stair_step_length)
+
+        current_x += max_len
+
+    # Formatting
+    if show_title:
+        ax.set_title(graph_title, fontsize=13, pad=20)
+    ax.set_ylabel(y_label)
+    if show_x_label:
+        ax.set_xlabel(x_label)
+
+    # Y scale and padding at top
+    ax.set_ylim(y_min, y_max + (y_max - y_min) * 0.1)
+    ax.set_yticks(np.arange(y_min, y_max + 1e-9, y_tick))
+
+    # X ticks
+    ax.xaxis.set_major_locator(MultipleLocator(base=x_tick))
+    # Show or hide tick marks
+    ax.tick_params(axis="x", which="both", bottom=show_x_ticks, top=False)
+    # Show or hide labels
+    if not show_x_tick_labels:
+        ax.tick_params(axis="x", labelbottom=False)
+
+    # Axis line visibility
+    if not show_x_axis:
+        ax.spines["bottom"].set_visible(False)
+
+    # Clean look on top and right
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # Expand xlim to include any stair-step extension
+    left = 0.5
+    right = max(plotted_xmax + 0.5, 2.5)
+    ax.set_xlim(left, right)
+
+    # Legend off to the right
+    ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5))
+
+    st.pyplot(fig)

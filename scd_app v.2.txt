@@ -1,0 +1,64 @@
+import streamlit as st
+import matplotlib.pyplot as plt
+import numpy as np
+
+st.title("Single-Case Design Graph Generator (Multiple Phases)")
+
+# Number of phases
+num_phases = st.number_input("How many phases?", min_value=1, max_value=5, value=2)
+
+# Input fields for each phase
+phase_names = []
+phase_data = []
+
+for i in range(num_phases):
+    name = st.text_input(f"Name for Phase {i+1}", value=chr(65+i))  # Defaults to A, B, C, etc.
+    data_str = st.text_input(f"Data for Phase {name} (comma-separated)", "")
+    if data_str:
+        try:
+            data = [float(x.strip()) for x in data_str.split(",") if x.strip()]
+        except ValueError:
+            st.error(f"Invalid number in phase {name}. Please enter numeric values.")
+            data = []
+    else:
+        data = []
+    phase_names.append(name)
+    phase_data.append(data)
+
+# Axis labels and scaling
+y_label = st.text_input("Dependent variable (Y-axis label)", "% correct responses")
+x_label = st.text_input("Unit of measurement (X-axis label)", "Sessions")
+y_min = st.number_input("Minimum Y value", value=0)
+y_max = st.number_input("Maximum Y value", value=100)
+y_tick = st.number_input("Y tick interval", value=10)
+
+# Generate graph
+if st.button("Generate Graph"):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+    markers = ["o", "s", "D", "^", "v"]
+
+    current_x = 1
+    for idx, (name, data) in enumerate(zip(phase_names, phase_data)):
+        if not data:
+            continue
+        x_vals = np.arange(current_x, current_x + len(data))
+        ax.plot(
+            x_vals, data,
+            color=colors[idx % len(colors)],
+            marker=markers[idx % len(markers)],
+            label=f"Phase {name}",
+            linewidth=2,
+            markersize=6
+        )
+        current_x += len(data)
+        if idx < len(phase_data) - 1:
+            ax.axvline(x=current_x - 0.5, color="black", linestyle="--")
+
+    # Axis formatting
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_ylim(y_min, y_max)
+    ax.set_yticks(np.arange(y_min, y_max + 0.0001, y_tick))
+    ax.legend(frameon=False)
+    st.pyplot(fig)
