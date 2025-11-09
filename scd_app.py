@@ -270,3 +270,21 @@ if st.button("Generate Graph"):
         )
 
         plt.close(leg_fig)
+import streamlit as st
+
+st.markdown(
+    """
+    <div style="text-align: center; margin-top: 2em;">
+        <a href="https://www.buymeacoffee.com/seanaevelyd" target="_blank">
+            <img
+                src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+                alt="Buy Me A Coffee"
+                style="height: 60px; width: 217px;"
+            >
+        </a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
