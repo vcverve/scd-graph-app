@@ -13,6 +13,8 @@ import streamlit as st
 # A token that means "a session happened, but there is no data point."
 # The hyphen is the taught marker. The dash and minus look-alikes cover text
 # pasted from Word, and x / na are kept from earlier versions of the app.
+DEFAULT_Y_LABEL = "% correct responses"
+
 NO_DATA_TOKENS = {"-", "–", "—", "−", "x", "na", "n/a"}
 
 DATA_BOX_HELP = (
@@ -72,6 +74,16 @@ def parse_series(s):
 # Plotting
 # ---------------------------------------------------------------------------
 
+def distinct_measure_names(phase_measures):
+    """Measure names in order of first appearance across phases."""
+    names = []
+    for measures in phase_measures:
+        for mname, _ in measures:
+            if mname not in names:
+                names.append(mname)
+    return names
+
+
 def build_figure(
     phase_titles,
     phase_measures,
@@ -107,8 +119,6 @@ def build_figure(
 
     if color_mode == "Grayscale":
         palette = grayscale_colors
-    elif color_mode == "Custom" and custom_colors:
-        palette = custom_colors
     else:
         palette = default_colors
 
@@ -127,7 +137,10 @@ def build_figure(
     y_top = y_max + (y_max - y_min) * 0.05
     plotted_xmax = 0.5
 
-    color_index = 0
+    # One color, one marker, and one legend entry per distinct measure name.
+    # A measure keeps the same color and marker in every phase.
+    style_order = distinct_measure_names(phase_measures)
+    labeled = set()
     for idx, (ptitle, measures) in enumerate(zip(phase_titles, phase_measures)):
         start_x = phase_starts[idx]
         L = phase_lengths[idx]
@@ -145,13 +158,21 @@ def build_figure(
             else:
                 # NaN breaks the line, so the data path stops at a gap.
                 px, py = x_vals, y_vals
-            color = palette[color_index % len(palette)]
-            color_index += 1
+            k = style_order.index(mname)
+            if color_mode == "Custom" and isinstance(custom_colors, dict) and mname in custom_colors:
+                color = custom_colors[mname]
+            else:
+                color = palette[k % len(palette)]
+            if mname in labeled:
+                label = "_nolegend_"
+            else:
+                label = mname
+                labeled.add(mname)
             ax.plot(
                 px, py,
                 color=color,
-                marker=markers[(idx + j) % len(markers)],
-                label=mname,
+                marker=markers[k % len(markers)],
+                label=label,
                 linewidth=2,
                 markersize=6,
             )
@@ -227,28 +248,53 @@ def main():
     phase_titles = []
     phase_measures = []  # per phase: [(measure_name, data_list), ...]
 
+    # The Y-axis label box sits further down the page, so read its current
+    # value from session state. It names a measure that has no name box.
+    default_m1_name = str(st.session_state.get("y_label", DEFAULT_Y_LABEL)).strip() or "Measure 1"
+
     for i in range(num_phases):
         st.subheader(f"Phase {i+1} Settings")
         ptitle = st.text_input(f"Title for Phase {i+1}", value=f"Phase {i+1}", key=f"pt{i}")
         phase_titles.append(ptitle)
 
-        m1_name = st.text_input(f"Name for Measure 1 in {ptitle}", value=f"Measure 1 ({ptitle})", key=f"m1n{i}")
-        m1_data = parse_series(st.text_input(f"Data for {m1_name}", key=f"m1d{i}"))
+        # The measure name boxes appear only when the phase has a second
+        # measure. Otherwise the measure is named from the Y-axis label.
+        two_measures = bool(st.session_state.get(f"add2_{i}", False))
+        if two_measures:
+            if f"m1n{i}" not in st.session_state:
+                st.session_state[f"m1n{i}"] = default_m1_name
+            m1_name = st.text_input(f"Name for Measure 1 in {ptitle}", key=f"m1n{i}").strip() or "Measure 1"
+            m1_label = m1_name
+        else:
+            m1_name = default_m1_name
+            m1_label = ptitle
+        m1_data = parse_series(st.text_input(f"Data for {m1_label}", key=f"m1d{i}"))
         st.caption(DATA_BOX_HELP)
 
-        add_second = st.checkbox(f"Add second measure for {ptitle}?", key=f"add2_{i}")
+        add_second = st.checkbox(f"Add second measure for {ptitle}", key=f"add2_{i}")
+        st.caption(
+            "Check this only for a phase with two lines, as in an alternating treatments design. "
+            "Each line then needs its own name for the legend."
+        )
         measures = [(m1_name, m1_data)]
-        if add_second:
-            m2_name = st.text_input(f"Name for Measure 2 in {ptitle}", value=f"Measure 2 ({ptitle})", key=f"m2n{i}")
+        if add_second and two_measures:
+            if f"m2n{i}" not in st.session_state:
+                st.session_state[f"m2n{i}"] = "Measure 2"
+            m2_name = st.text_input(f"Name for Measure 2 in {ptitle}", key=f"m2n{i}").strip() or "Measure 2"
             m2_data = parse_series(st.text_input(f"Data for {m2_name}", key=f"m2d{i}"))
             st.caption(DATA_BOX_HELP)
+            if m2_name == m1_name:
+                st.warning(
+                    f"Both measures in {ptitle} are named {m1_name}, so they will share one color, "
+                    "one marker, and one legend entry. Give each measure its own name."
+                )
             measures.append((m2_name, m2_data))
 
         phase_measures.append(measures)
 
     st.header("Axis Settings")
     graph_title = st.text_input("Graph Title", "Single-Case Design Graph")
-    y_label = st.text_input("Dependent variable (Y-axis label)", "% correct responses")
+    y_label = st.text_input("Dependent variable (Y-axis label)", DEFAULT_Y_LABEL, key="y_label")
     x_label = st.text_input("Unit of measurement (X-axis label)", "Sessions")
     y_min = st.number_input("Minimum Y value", value=0.0)
     y_max = st.number_input("Maximum Y value", value=100.0)
@@ -304,12 +350,12 @@ def main():
     st.subheader("Color Options")
     color_mode = st.radio("Select color mode:", ["Color", "Grayscale", "Custom"], index=0)
 
-    custom_colors = []
+    custom_colors = {}
     if color_mode == "Custom":
-        for i, phase in enumerate(phase_measures):
-            for j, (measure_name, _) in enumerate(phase):
-                color = st.color_picker(f"Select color for {measure_name}", "#000000", key=f"color_{i}_{j}")
-                custom_colors.append(color)
+        for measure_name in distinct_measure_names(phase_measures):
+            custom_colors[measure_name] = st.color_picker(
+                f"Select color for {measure_name}", "#000000", key=f"color_{measure_name}"
+            )
 
     st.header("Multiple Baseline Options")
     is_multiple_baseline = st.checkbox("This graph is part of a multiple baseline figure", value=False)
