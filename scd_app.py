@@ -1,7 +1,7 @@
 import io
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.transforms import blended_transform_factory
+from matplotlib.transforms import Bbox, blended_transform_factory
 from matplotlib.ticker import MultipleLocator
 import streamlit as st
 
@@ -136,6 +136,7 @@ def build_figure(
 
     y_top = y_max + (y_max - y_min) * 0.05
     plotted_xmax = 0.5
+    phase_lines = []
 
     # One color, one marker, and one legend entry per distinct measure name.
     # A measure keeps the same color and marker in every phase.
@@ -187,23 +188,15 @@ def build_figure(
             )
 
         if idx < len(phase_titles) - 1 and L > 0:
+            # The phase change line sits halfway between the last session of
+            # this phase and the first session of the next one.
             x_line = start_x + L - 0.5
-            ax.axvline(x=x_line, color="black", linestyle="--", linewidth=1.5, zorder=3)
-
-            if is_multiple_baseline and extend_phase_lines and stair_step_length > 0:
-                bt = blended_transform_factory(ax.transData, ax.transAxes)
-                drop_axes = 0.06
-                ax.vlines(
-                    x_line, 0.0, -drop_axes,
-                    colors="black", linestyles="--", linewidth=1.8,
-                    transform=bt, clip_on=False, zorder=4
-                )
-                ax.hlines(
-                    -drop_axes, x_line, x_line + stair_step_length,
-                    colors="black", linestyles="--", linewidth=1.8,
-                    transform=bt, clip_on=False, zorder=4
-                )
-                plotted_xmax = max(plotted_xmax, x_line + stair_step_length + 0.5)
+            if is_multiple_baseline:
+                # Drawn after the x range is set, so the stair-step can be
+                # joined to the graphs above and below it.
+                phase_lines.append(x_line)
+            else:
+                ax.axvline(x=x_line, color="black", linestyle="--", linewidth=1.5, zorder=3)
 
     if show_title:
         ax.set_title(graph_title, fontsize=13, pad=20)
@@ -233,7 +226,83 @@ def build_figure(
     if show_legend and labels:
         ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5))
 
+    if is_multiple_baseline:
+        _finish_multiple_baseline(
+            fig, ax, phase_lines, show_title, show_x,
+            extend_phase_lines and stair_step_length > 0, stair_step_length,
+        )
+
     return fig, ax, handles, labels
+
+
+# Line width of the phase change lines, in points.
+PHASE_LINE_WIDTH = 1.5
+# How far the stair-step drops below the graph, as a share of the graph height.
+STAIR_DROP = 0.06
+
+
+def _finish_multiple_baseline(fig, ax, phase_lines, show_title, show_x, show_stair, stair_step_length):
+    """Draw the phase change lines of one graph in a multiple baseline figure and
+    set the area that is saved, so that the stacked graphs line up.
+
+    Every graph in the stack is saved at the full figure width, so the plotting
+    area sits at the same left and right position in every image no matter how
+    wide the legend or the labels are. A graph below the top one (main title off)
+    is cut off at the top of its plotting area, and its phase change line runs to
+    that top edge. A graph with the stair-step is cut off at the bottom of its
+    horizontal step. Stacked edge to edge, the step of one graph meets the phase
+    change line of the graph below it.
+    """
+    fig_w, fig_h = fig.get_size_inches()
+    renderer = fig.canvas.get_renderer()
+    content = fig.get_tightbbox(renderer)  # inches, before the phase lines
+    pad = 0.1
+    axes_box = ax.get_position()  # figure fraction
+    half_lw = PHASE_LINE_WIDTH / 72.0 / 2.0 / fig_h  # half a line width, figure fraction
+
+    lower_graph = not show_title
+    if lower_graph:
+        top = max(axes_box.y1, content.y1 / fig_h)
+    else:
+        top = axes_box.y1
+    step_y = axes_box.y0 - STAIR_DROP * axes_box.height
+
+    # x in sessions, y in figure fraction, so the lines can leave the plotting area.
+    trans = blended_transform_factory(ax.transData, fig.transFigure)
+    x_right = ax.get_xlim()[1]
+    for x_line in phase_lines:
+        if show_stair:
+            # Start at the far end of the step, where it meets the graph below,
+            # so the dash pattern begins at the join. Never past the x-axis end.
+            x_end = min(x_line + stair_step_length, x_right)
+            xs = [x_end, x_line, x_line]
+            ys = [step_y, step_y, top]
+        else:
+            xs = [x_line, x_line]
+            ys = [top, axes_box.y0]
+        ax.add_line(plt.Line2D(
+            xs, ys, transform=trans, color="black", linestyle="--",
+            linewidth=PHASE_LINE_WIDTH, clip_on=False, zorder=3,
+        ))
+
+    x0 = min(0.0, content.x0)
+    x1 = max(fig_w, content.x1)
+    if lower_graph:
+        y1 = top * fig_h
+    else:
+        y1 = content.y1 + pad
+    if show_stair and phase_lines and not show_x:
+        y0 = (step_y - half_lw) * fig_h
+    else:
+        y0 = content.y0 - pad
+    fig._scd_save_bbox = Bbox.from_extents(x0, y0, x1, y1)
+
+
+def export_kwargs(fig):
+    """Save settings for the graph: the fixed area for a multiple baseline
+    graph, otherwise the tight crop the app has always used."""
+    bbox = getattr(fig, "_scd_save_bbox", None)
+    return {"bbox_inches": bbox if bbox is not None else "tight"}
 
 
 # ---------------------------------------------------------------------------
@@ -391,10 +460,10 @@ def main():
             stair_step_length=stair_step_length,
         )
 
-        st.pyplot(fig)
+        st.pyplot(fig, **export_kwargs(fig))
 
         png_buf = io.BytesIO()
-        fig.savefig(png_buf, format="png", bbox_inches="tight", transparent=True)
+        fig.savefig(png_buf, format="png", transparent=True, **export_kwargs(fig))
         st.download_button(
             label="Download PNG",
             data=png_buf.getvalue(),
@@ -403,7 +472,7 @@ def main():
         )
 
         svg_buf = io.BytesIO()
-        fig.savefig(svg_buf, format="svg", bbox_inches="tight", transparent=True)
+        fig.savefig(svg_buf, format="svg", transparent=True, **export_kwargs(fig))
         st.download_button(
             label="Download SVG",
             data=svg_buf.getvalue(),
