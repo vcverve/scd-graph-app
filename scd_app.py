@@ -319,7 +319,7 @@ def export_kwargs(fig):
 
 APP_NAME = "Single-Case Design Graph Generator"
 SETTINGS_VERSION = 1
-MAX_PHASES = 5
+MAX_PHASES = 10
 COLOR_MODES = ["Color", "Grayscale", "Custom"]
 
 # Every setting outside the phases, with its default. The keys are the widget
