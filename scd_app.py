@@ -22,9 +22,10 @@ NO_DATA_TOKENS = {"-", "–", "—", "−", "x", "na", "n/a"}
 
 DATA_BOX_HELP = (
     "Type one value per session, in order, separated by commas, spaces, or both. "
-    "For a session that happened but has no data point, type a hyphen (-) in its place, "
-    "as in 4, -, 5, or leave the spot between two commas empty, as in 4,,5. "
-    "That session keeps its place on the x-axis and no point is drawn for it."
+    "For a session that happened but has no data point, type a hyphen (-) or leave its spot "
+    "empty, as in 4, -, 5 or 4,,5. This works for the first and last sessions too (,,4,5 or 4,5,,) "
+    "and for a whole phase with no data, one hyphen per session (-, -, -). "
+    "Each of those sessions keeps its place on the x-axis and no point is drawn for it."
 )
 
 
@@ -33,16 +34,14 @@ def parse_series_text(s):
 
     Commas and whitespace both separate values. A lone hyphen, or an empty
     slot between two commas, is a session with no data (NaN). A hyphen joined
-    to a number, as in -3, is a negative number. A stray comma at the very
-    start or end of the entry is ignored rather than counted as a session.
+    to a number, as in -3, is a negative number. An empty slot keeps its
+    place anywhere in the entry, including before the first comma and after
+    the last one, so ,,4,5 starts with two sessions with no data and 4,5,,
+    ends with two. A box left completely empty has no sessions.
     """
     if s is None or not s.strip():
         return [], []
     pieces = s.split(",")
-    while pieces and not pieces[0].strip():
-        pieces.pop(0)
-    while pieces and not pieces[-1].strip():
-        pieces.pop()
 
     values, bad = [], []
     for piece in pieces:
